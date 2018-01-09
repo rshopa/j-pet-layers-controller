@@ -13,7 +13,7 @@ The application is written in Python 2.7 (exact version Python 2.7.13), with the
 
 ## Usage
 
-The generic usage is as follows:
+Both files (```LayersController.py``` and ```reduce_multilayer.py```) must be located in the same directory. The generic usage is as follows:
 ```
 $ python reduce_multilayer.py <input_file> [-o <output_file>] [-l <layer ID>] [-with_tof]
 ```
