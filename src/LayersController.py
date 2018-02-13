@@ -13,20 +13,21 @@ class LayersController:
     is 'hidden' and not set during initialisation (see the description in methods). 
     """
     # Class attribute
-    C_LIGHT_SPEED = 299792458.   # m/s, float
+    C_LIGHT_SPEED = 299792458.  # m/s, float
 
     def __init__(self,
                  geometry=None,
                  adjust_times=False):
         """
         :param geometry: dictionary of parameters:
-        :param adjust_times: whether to adjust times of hit or no            
+        :param adjust_times: whether to adjust times of hit or no  
         """
         if geometry is None:
             self.geometry = {
                 'LayersRadiuses': [42.5, 46.75, 57.5],
                 'ScannerLength': 50.,
-                'StripCrossSection': [.7, 1.9]
+                'StripCrossSection': [.7, 1.9],
+                'ZeroLayerRadius': None
             }
         else:
             self.geometry = geometry
@@ -42,6 +43,26 @@ class LayersController:
             'loaded': False,
             'transformed': False
         }
+
+    def add_zero_layer(self, total_strips_no=192):
+        """
+        Detects the radius which the strips are tightly composed in
+        :param total_strips_no: number of strips (default is 48+48+96)
+        :return: None
+        """
+        # (0.7/(2 sin(dQ/2))) * cos(dQ/2) + 0.95
+        delta_theta = 2 * numpy.pi / total_strips_no
+        self.geometry['ZeroLayerRadius'] = \
+            round(self.geometry['StripCrossSection'][0] /
+                  (2 * numpy.tan(delta_theta / 2)), 2) + self.geometry['StripCrossSection'][1] / 2
+
+    def add_layer(self, radius):
+        """
+        Adds new radius to self.geometry['LayersRadiuses']
+        :param radius: the radius of a new layer
+        :return: None
+        """
+        self.geometry['LayersRadiuses'].append(radius)
 
     def read_data(self, filename):
         """
@@ -146,17 +167,17 @@ class LayersController:
             XY = [0., p1_XY[1]]
         else:
             # from line equation on a plane
-            a = (p2_XY[1]-p1_XY[1]) / (p2_XY[0]-p1_XY[0])
-            b = (p2_XY[0]*p1_XY[1]-p1_XY[0]*p2_XY[1]) / (p2_XY[0]-p1_XY[0])
+            a = (p2_XY[1] - p1_XY[1]) / (p2_XY[0] - p1_XY[0])
+            b = (p2_XY[0] * p1_XY[1] - p1_XY[0] * p2_XY[1]) / (p2_XY[0] - p1_XY[0])
             # the slope for the perpendicular is inv minus slope of the original (a -> -1/a)
-            x = -(a*b) / (a**2+1)
-            y = -x/a
+            x = -(a * b) / (a ** 2 + 1)
+            y = -x / a
             XY = [x, y]
         # fractions along original LOR from the 'centre' of remapped LOR
-        norm_radiuses = [numpy.sqrt((lor[0]-XY[0])**2 + (lor[1]-XY[1])**2),
-                         numpy.sqrt((lor[4]-XY[0])**2 + (lor[5]-XY[1])**2)]
+        norm_radiuses = [numpy.sqrt((lor[0] - XY[0]) ** 2 + (lor[1] - XY[1]) ** 2),
+                         numpy.sqrt((lor[4] - XY[0]) ** 2 + (lor[5] - XY[1]) ** 2)]
         # from the similarity of triangles
-        Z = (norm_radiuses[0]*lor[6]+norm_radiuses[1]*lor[2])/sum(norm_radiuses)
+        Z = (norm_radiuses[0] * lor[6] + norm_radiuses[1] * lor[2]) / sum(norm_radiuses)
         # output
         return [XY[0], XY[1], Z]
 
@@ -172,9 +193,9 @@ class LayersController:
         :return: list of [x, y, z]
         """
         if r_ini is None:
-            r_ini = numpy.sqrt(cartesians[0]**2 + cartesians[1]**2)
-        map_coefficient = r_new/r_ini
-        return map(lambda x: x*map_coefficient, cartesians)
+            r_ini = numpy.sqrt(cartesians[0] ** 2 + cartesians[1] ** 2)
+        map_coefficient = r_new / r_ini
+        return map(lambda x: x * map_coefficient, cartesians)
 
     # --------- private methods --------------------
 
@@ -184,11 +205,11 @@ class LayersController:
         :param hit: one hit (at least X and Y)
         :return: layer radius, None if exceeds ranges
         """
-        hit_radius = numpy.sqrt(hit[0]**2 + hit[1]**2)
+        hit_radius = numpy.sqrt(hit[0] ** 2 + hit[1] ** 2)
         is_in_layer = map(lambda x:
-                          x - self.geometry['StripCrossSection'][1]/2
+                          x - self.geometry['StripCrossSection'][1] / 2
                           <= hit_radius
-                          <= x + self.geometry['StripCrossSection'][1]/2,
+                          <= x + self.geometry['StripCrossSection'][1] / 2,
                           self.geometry['LayersRadiuses'])
         try:
             output = self.geometry['LayersRadiuses'][is_in_layer.index(True)]
@@ -212,7 +233,7 @@ class LayersController:
         :param adjust_times: whether to adjust times of hit or no
         :return: new hit (coordinates + time tag)
         """
-        lor_displacement_squarred = lor_centre[0]**2 + lor_centre[1]**2
+        lor_displacement_squarred = lor_centre[0] ** 2 + lor_centre[1] ** 2
         ini_layer = self.__detect_layer(hit)
         # outside strips - leave as it is
         if ini_layer is None:
@@ -225,18 +246,23 @@ class LayersController:
             # biased hit corresponds to the move of (0,0,0) to lor_centre
             hit_biased = map(sum, zip(hit[0:3], map(lambda x: -x, lor_centre)))
             # hit distance from the centre of coordinates (in XY)
-            hit_XY_squarred = hit[0]**2 + hit[1]**2
+            hit_XY_squarred = hit[0] ** 2 + hit[1] ** 2
             # the difference between actual scattering ang geometrical centre of the strip
             depth_bias = numpy.sqrt(hit_XY_squarred) - ini_layer
 
+            # choose the layer to map
+            if out_layer_id == 0:
+                # note that it has to be already defined (not None)!
+                new_layer = self.geometry['ZeroLayerRadius']
+            else:
+                new_layer = self.geometry['LayersRadiuses'][out_layer_id - 1]
+
             # detect R_new, R_ini (for map_by_radius)
             if static_radiuses:
-                r_new = numpy.sqrt((self.geometry['LayersRadiuses'][out_layer_id-1])**2
-                                   - lor_displacement_squarred)
-                r_ini = numpy.sqrt(ini_layer**2 - lor_displacement_squarred)
+                r_new = numpy.sqrt(new_layer ** 2 - lor_displacement_squarred)
+                r_ini = numpy.sqrt(ini_layer ** 2 - lor_displacement_squarred)
             else:
-                r_new = numpy.sqrt((self.geometry['LayersRadiuses'][out_layer_id-1]
-                                   + depth_bias)**2 - lor_displacement_squarred)
+                r_new = numpy.sqrt((new_layer + depth_bias) ** 2 - lor_displacement_squarred)
                 r_ini = numpy.sqrt(hit_XY_squarred - lor_displacement_squarred)
 
             # estimate new coordinates
@@ -246,11 +272,11 @@ class LayersController:
             # adjust time if needed
             if adjust_times:
                 # difference between LOR's propagation distance
-                delta_distance = numpy.sqrt(sum(map(lambda x: x**2, new_coordinates))) \
-                                 - numpy.sqrt(sum(map(lambda x: x**2, hit_biased)))
+                delta_distance = numpy.sqrt(sum(map(lambda x: x ** 2, new_coordinates))) \
+                                 - numpy.sqrt(sum(map(lambda x: x ** 2, hit_biased)))
                 # multiply by 100 to convert m to cm and by 1e12 to convert to ps
                 # a warning should be ignored
-                output.append(hit[3] + round(1e12*delta_distance/(self.C_LIGHT_SPEED*100.), 1))
+                output.append(hit[3] + round(1e12 * delta_distance / (self.C_LIGHT_SPEED * 100.), 1))
             else:
                 output.append(hit[3])
             return output
@@ -279,6 +305,3 @@ class LayersController:
                                                            adjust_times), [event[:4], event[4:8]])
         # flatten list
         return [item for sublist in remapped_event for item in sublist]
-
-
-
